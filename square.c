@@ -141,7 +141,13 @@ motiontype mot;
 typedef struct {
     double motorSpeedL, motorSpeedR;
     int time;
-} logFile;
+} logSpeedStruct;
+
+
+typedef struct {
+    double x,y,theta;
+    int time;
+    } logOdoStruct;
 
 #define LOGARRAYSIZE 10000
 
@@ -154,8 +160,10 @@ enum {ms_init,ms_fwd,ms_turn,ms_end};
 
 int main()
 {
-    logFile logArray[10000];
+    logSpeedStruct logSpeedArray[LOGARRAYSIZE];
+    logOdoStruct logOdoArray[LOGARRAYSIZE];
     int logCounter = 0;
+
 
     int running,n=0,arg,time=0;
     double dist=0,angle=0;
@@ -316,11 +324,18 @@ int main()
         }
 
         //added by me/kasper
-        //log data in the array
-        logArray[logCounter].motorSpeedL = mot.motorspeed_l;
-        logArray[logCounter].motorSpeedR = mot.motorspeed_r;
-        logArray[logCounter].time = mission.time;
+        //log data in the arrays
+        if (logCounter < LOGARRAYSIZE) {
+        logSpeedArray[logCounter].motorSpeedL = mot.motorspeed_l;
+        logSpeedArray[logCounter].motorSpeedR = mot.motorspeed_r;
+        logSpeedArray[logCounter].time = logOdoArray[logCounter].time = mission.time;
+
+        logOdoArray[logCounter].theta = odo.theta_new;
+        logOdoArray[logCounter].x = odo.x_new;
+        logOdoArray[logCounter].y = odo.y_new;
+
         logCounter++;
+        }
         //---------
 
 
@@ -346,11 +361,20 @@ int main()
 
 }/* end of main control loop */
 
-    FILE *fp = fopen("dataLogg.dat", "wr");
+    FILE *fp;
+    fp = fopen("speedLog.dat", "wr");
     for (int i = 0; i < logCounter; i++) {
 
         //fprintf(fp, "%d,%d,%0.8f,%0.8f\n", i, dataSample.time, dataSample.speedL, dataSample.speedR);
-        fprintf(fp, "%i,%0.8f,%0.8f,\n", logArray[i].time, logArray[i].motorSpeedL, logArray[i].motorSpeedR);
+        fprintf(fp, "%i,%0.8f,%0.8f\n", logSpeedArray[i].time, logSpeedArray[i].motorSpeedL, logSpeedArray[i].motorSpeedR);
+    }
+    fclose(fp);
+
+    fp = fopen("odoLog.dat", "wr");
+    for (int i = 0; i < logCounter; i++) {
+
+
+        fprintf(fp, "%i,%0.8f,%0.8f,%0.8f\n", logOdoArray[i].time, logOdoArray[i].x, logOdoArray[i].y, logOdoArray[i].theta);
     }
     fclose(fp);
 
@@ -415,7 +439,7 @@ void update_odo(odotype *p)
 
     p->y_new += deltaU* sin(p->theta_new);     //eq 6 from exercise 2
 
-    printf("x is %f /// y is %f /// theta is %f\n", p->x_new, p->y_new, p->theta_new);
+    //printf("x is %f /// y is %f /// theta is %f\n", p->x_new, p->y_new, p->theta_new);
 }
 
 
