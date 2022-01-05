@@ -73,6 +73,13 @@ typedef struct{ //input signals
     double right_pos,left_pos;
     // internal variables
     int left_enc_old, right_enc_old;
+
+    //added by me/kasper
+    float theta_new, theta_old;
+    float x_new, x_old;
+    float y_new, y_old;
+
+
 } odotype;
 
 void reset_odo(odotype *p);
@@ -136,7 +143,7 @@ typedef struct {
     int time;
 } logFile;
 
-
+#define LOGARRAYSIZE 10000
 
 // end og exercise 3.1 for now
 
@@ -341,9 +348,9 @@ int main()
 
     FILE *fp = fopen("dataLogg.dat", "wr");
     for (int i = 0; i < logCounter; i++) {
-        logFile dataSample = logArray[i];
+
         //fprintf(fp, "%d,%d,%0.8f,%0.8f\n", i, dataSample.time, dataSample.speedL, dataSample.speedR);
-        fprintf(fp, "%i,%i,%0.8f,%0.8f,\n", i, dataSample.time, dataSample.motorSpeedL, dataSample.motorSpeedR);
+        fprintf(fp, "%i,%0.8f,%0.8f,\n", logArray[i].time, logArray[i].motorSpeedL, logArray[i].motorSpeedR);
     }
     fclose(fp);
 
@@ -367,27 +374,44 @@ int main()
 
 void reset_odo(odotype * p)
 {
-    p->right_pos = p->left_pos = 0.0;
+    //added by me/kasper
+    p->right_pos = p->left_pos = p->theta_old = p->x_old = p->y_old = 0.0;
     p->right_enc_old = p->right_enc;
     p->left_enc_old = p->left_enc;
 }
 
 void update_odo(odotype *p)
 {
-    int delta;
+    int delta_l;
+    int delta_r;
 
-    delta = p->right_enc - p->right_enc_old;
-    if (delta > 0x8000) delta -= 0x10000;
-    else if (delta < -0x8000) delta += 0x10000;
+    delta_r = p->right_enc - p->right_enc_old;
+    if (delta_r > 0x8000) delta_r -= 0x10000;
+    else if (delta_r < -0x8000) delta_r += 0x10000;
     p->right_enc_old = p->right_enc;
-    p->right_pos += delta * p->cr;
+    p->right_pos += delta_r * p->cr;
 
-    delta = p->left_enc - p->left_enc_old;
-    if (delta > 0x8000) delta -= 0x10000;
-    else if (delta < -0x8000) delta += 0x10000;
+    delta_l = p->left_enc - p->left_enc_old;
+    if (delta_l > 0x8000) delta_l -= 0x10000;
+    else if (delta_l < -0x8000) delta_l += 0x10000;
     p->left_enc_old = p->left_enc;
-    p->left_pos += delta * p->cl;
+    p->left_pos += delta_l * p->cl;
 
+    //added by me/kasper
+
+    float deltaU;
+    deltaU = (delta_r+delta_l)/2;                    //eq 3 from exercise 2
+
+    float deltaTheta;
+    deltaTheta = (delta_r-delta_l)/WHEEL_SEPARATION;     //eq 4 from exercise 2
+
+    p->theta_new = p->theta_old - deltaTheta;            //eq 7 from exercise 2
+
+    p->x_new = p->x_old + deltaU* cos(p->theta_new);     //eq 5 from exercise 2
+
+    p->y_new = p->y_old + deltaU* sin(p->theta_new);     //eq 6 from exercise 2
+
+   // printf("x is %f\n", p->x_new);
 }
 
 
