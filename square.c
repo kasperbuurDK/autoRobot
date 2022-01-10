@@ -270,15 +270,24 @@ int main()
                 break;
 
             case ms_measureWithIR:
-                for (int i = 0; i < irsensor->length; i++) {
-                    printf("%d = %d , ", i+1, irsensor->data[i]);
+                for (int i = 1; i < irsensor->length-2; i++) {
+                    printf("%d = %d , ", i, irsensor->data[i]);
                 }
+
                 printf("\n");
                 dist = 0.5;
                 mission.state = ms_fwd;
                 n--;
                 if (n == 0) mission.state = ms_end;
 
+                /*
+                 IRSENSORS
+                 0 left side sensor
+                 1 front left sensor
+                 2 front middle sensor
+                 3 front right sensor
+                 4 right side sensor
+                 */
                 break;
             case ms_fwd:
                 if (fwd(dist, speed, mission.time)) mission.state = ms_measureWithIR;
