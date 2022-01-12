@@ -143,12 +143,16 @@ odotype odo;
 smtype mission;
 motiontype mot;
 
+
+
+
 int main()
 {
     int missonCount = 0;
     int running, n = 0, arg, time = 0;
     double dist = 0, angle = 0, speed = 0;
     dataPacket dataLog[LOG_SIZE];
+
 
     /* Establish connection to robot sensors and actuators.*/
     if (rhdConnect('w', "localhost", ROBOTPORT) != 'w') {
@@ -537,19 +541,26 @@ void angular_controller(odotype *p)   // exercise 7 1
     p->delta_v = K*(p->theta_ref-p->theta);
 }
 
-double blackWhiteTrans(double inputValue)
+double blackWhiteTrans(double inputValue, int sensorNo)
 {
-    double diffValue = WHITE-BLACK;
-    return (inputValue - WHITE + diffValue)/diffValue;
+
+    double blackArray[] = {45.4114832535885, 46.6411483253589, 45.4593301435407, 45.5119617224880,
+                           45.8612440191388, 45.6124401913876, 46.1052631578947, 45.8277511961723};
+
+    double whiteArray[] = {64.3253588516746, 62.8325358851675, 65.1913875598086, 63.1148325358852,
+                           76.9952153110048, 72.4019138755981, 67.5598086124402, 61.3732057416268};
+
+    double diffValue = whiteArray[sensorNo]-blackArray[sensorNo];
+    return (inputValue - whiteArray[sensorNo] + diffValue)/diffValue;
 }
 
 int linesensorMinimumIntensity(symTableElement *linesensor)
 {
     int index = 0;
     double calibD;
-    double minim = blackWhiteTrans(linesensor->data[0]);
+    double minim = blackWhiteTrans(linesensor->data[0], 0);
     for (int i = 1; i < linesensor->length; i++){
-        calibD = blackWhiteTrans(linesensor->data[i]);
+        calibD = blackWhiteTrans(linesensor->data[i], i);
         if (calibD < minim){
             index = i;
             minim = calibD;
@@ -567,8 +578,8 @@ double centerOfMass()   // exercise 7 1
 {
     double num = 0, det = 0;
     for (int i = 0; i < linesensor->length; i++){
-        num += (i+1)*(1-blackWhiteTrans(linesensor->data[i]));
-        det += (1-blackWhiteTrans(linesensor->data[i]));
+        num += (i+1)*(1-blackWhiteTrans(linesensor->data[i], i));
+        det += (1-blackWhiteTrans(linesensor->data[i], i));
     }
     double res = num/det;
     //printf("Indez = %0.5f\n", res);
