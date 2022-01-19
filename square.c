@@ -23,26 +23,12 @@
 #include "xmlio.h"
 
 
-/* TO DO
- * Follow line give Seg. fault when no line is found.
- * An example SMR program.
- *
- */
-#define SIM
-#ifdef SIM
+
+
 #define WHITE 128
 #define BLACK 0
-#define ROBOTPORT    8000
-#else
-const double blackArray[] = {45.4114832535885, 46.6411483253589, 45.4593301435407, 45.5119617224880,
-                           45.8612440191388, 45.6124401913876, 46.1052631578947, 45.8277511961723};
-
-    const double whiteArray[] = {64.3253588516746, 62.8325358851675, 65.1913875598086, 63.1148325358852,
-                           76.9952153110048, 72.4019138755981, 67.5598086124402, 61.3732057416268};
-    #define WHITE 61
-    #define BLACK 46
-    #define ROBOTPORT    24902 //24902
-#endif
+#define ROBOTPORTSIM  8000
+#define ROBOTPORTREAL 24902
 
 struct xml_in *xmldata;
 struct xml_in *xmllaser;
@@ -63,6 +49,8 @@ double laserpar[10];
 #define ORIGO_TO_LASER 0.26 // length from origo to laser unit.
 #define ORIGO_TO_LINE 0.23 // length from origo to laser unit.
 #define SMR_LENGTH 0.36
+#define SMR_WIDTH 0.30
+#define K_WALL 1
 
 void serverconnect(componentservertype *s);
 void xml_proc(struct xml_in *x);
@@ -90,10 +78,11 @@ getoutputref(const char *sym_name, symTableElement *tab) {
 * odometry
 */
 #define WHEEL_DIAMETER   0.06522    /* m */
-#define WHEEL_SEPARATION 0.26    /* m */
+#define WHEEL_SEPARATION  0.26  //0.261570//        /* m */
 #define DELTA_M (M_PI * WHEEL_DIAMETER / 2000)
-#define K1 (M_PI*(WHEEL_SEPARATION/2))/180
-#define K 0.01
+#define K1 ((M_PI*(WHEEL_SEPARATION/2))/180)      /* */
+#define K 0.01                      /* */
+
 
 typedef struct {
     //input signals
@@ -128,11 +117,12 @@ typedef struct {//input
     //output
     double motorspeed_l, motorspeed_r;
     int finished;
-    int ls_ref, ls;
+    double ls_ref, ls;
     double delta_v;
     // internal variables
     double startpos;
     int dir;
+    int color;
 } motiontype;
 
 typedef struct {
@@ -140,18 +130,16 @@ typedef struct {
     int time;
 } smtype;
 
-typedef struct {
-    double x, y, theta;
-} pose;
-
 enum {
-    mot_stop = 1, mot_move, mot_follow,mot_turn
+    mot_stop = 1, mot_move, mot_follow,mot_turn, mot_followWall
 };
 enum {
-    ms_init, ms_obs1, ms_obs2, ms_obs3, ms_obs4, ms_obs5, ms_obs6, ms_end, ms_error
+    ms_init, ms_obs1, ms_obs2, ms_obs3, ms_obs4, ms_obs5, ms_obs6, ms_end, ms_error, ms_forward = 20, ms_square = 30
 };
 enum {
-    sbms_init, sbms_stage1, sbms_stage2, sbms_stage3, sbms_stage4, sbms_stage5, sbms_stage6, sbms_stage7, sbms_stage8, sbms_stage9, sbms_stage10, sbms_stage11, sbms_stage12, sbms_end
+    sbms_init, sbms_stage1, sbms_stage2, sbms_stage3, sbms_stage4, sbms_stage5,
+    sbms_stage6, sbms_stage7, sbms_stage8, sbms_stage9, sbms_stage10, sbms_stage11,
+    sbms_stage12, sbms_stage13, sbms_stage14, sbms_stage15, sbms_stage16, sbms_testStage, sbms_end
 };
 enum {
     left = 6, middel = 4, right = 2
@@ -161,7 +149,10 @@ enum {
 void update_motcon(motiontype *p);
 void angular_controller(odotype *p);
 int linesensorMinimumIntensity(symTableElement *linesensor);
-double blackWhiteTrans(double, int);
+
+double blackWhiteTransSim(double inputValue);
+double blackWhiteTransReal(double inputValue, int sensorNo);
+
 int fwd(double dist, double speed, int time);
 int turn(double angle, double speed, int time);
 void sm_update(smtype *p);
@@ -172,6 +163,9 @@ boolean isCrossing();
 boolean checkLaserDist(double dist, int zone);
 boolean checkLines(int lineLow, int lineHigh);
 
+int followWall(double dist, double range, int zone, double speed, int time);
+void wall_controller(motiontype *p);
+
 // SMR input/output data
 symTableElement *inputtable, *outputtable;
 symTableElement *lenc, *renc, *linesensor, *irsensor, *speedl, *speedr, *resetmotorr, *resetmotorl;
@@ -180,23 +174,58 @@ smtype mission;
 motiontype mot;
 dataPacket dataLog[LOG_SIZE];
 int missonCount = 0;
+boolean runInSimulator = FALSE;
 
-int main()
+const double blackArray[] = {45.4114832535885, 46.6411483253589, 45.4593301435407, 45.5119617224880,
+                             45.8612440191388, 45.6124401913876, 46.1052631578947, 45.8277511961723};
+
+const double whiteArray[] = {64.3253588516746, 62.8325358851675, 65.1913875598086, 63.1148325358852,
+                             76.9952153110048, 72.4019138755981, 67.5598086124402, 61.3732057416268};
+
+int main(int argc, char *argv[])
 {
+
+    if (argc != 3) {
+        printf("YOU must provide an argument sim or real AND a number 1-4 for which starting position\n");
+        printf("\"./square sim\" starts program suitable for simulator\n");
+        printf("\"./square real\" starts program suitable for REAL SMR\n");
+        return -1;
+    }
+    int robotPort = 0;
+
+    if (strcmp(argv[1], "sim") == 0) {
+        runInSimulator = TRUE;
+        robotPort = ROBOTPORTSIM;
+        printf("RUNNING IN SIMULATOR\n");
+    } else if (strcmp(argv[1], "real") == 0) {
+        runInSimulator = FALSE;
+        robotPort = ROBOTPORTREAL;
+        printf("RUNNING IN REAL\n");
+
+    } else {
+        printf("Invalid argument\n");
+        return -1;
+    }
+
+    int startObstacle = (int) strtoul(argv[2], NULL, 10);
+    if (startObstacle < 1 || startObstacle > 6) {
+        if (startObstacle == ms_forward || startObstacle == ms_square) {
+            //all good
+        } else{
+            printf("Invalid obs number\n");
+            return -1;
+        }
+    }
+
+
+    printf("startObstacle is %i\n", startObstacle);
+
     int running, n = 0, arg, time = 0, zone;
     int timeStamp1 = 1, timeStamp2 = -1;
     double dist = 0, angle = 0, speed = 0, wallDist = 0;
-    pose poseA, poseB;
-    poseA.x = 0;
-    poseB.x = 0;
-    poseA.y = 0;
-    poseB.y = 0;
-
-
-
 
     /* Establish connection to robot sensors and actuators.*/
-    if (rhdConnect('w', "localhost", ROBOTPORT) != 'w') {
+    if (rhdConnect('w', "localhost", robotPort) != 'w') {
         printf("Can't connect to rhd \n");
         exit(EXIT_FAILURE);
     }
@@ -269,7 +298,7 @@ int main()
     }
     /* Read sensors and zero our position.*/
     rhdSync();
-    odo.w = 0.256;
+    odo.w = 0.256; //WHEEL_SEPARATION; //
     odo.cr = DELTA_M;
     odo.cl = odo.cr;
     odo.left_enc = lenc->data[0];
@@ -305,23 +334,21 @@ int main()
                 dist = 2;
                 speed = 0.2;
                 n = 4;
-                angle = (90.0) / 180 * M_PI;
+                angle = M_PI/2;
+                wallDist = 0.3;
                 if (!checkLaserDist(wallDist,zone)) {
                     printf("Laser init!\n");
-                    mission.state = ms_obs3;
+                    mission.state = startObstacle;
+                    mission.stage = sbms_init;
                 }
-                /*printf("Line Data = ");
-                for (int i = 0; i < linesensor->length; i++){
-                    printf("%d = %d , ",i,linesensor->data[i]);
-                }
-                printf("\n");*/
+
                 break;
-            case ms_obs1:  // Start 3.4 -0.1 1.57  --------- DONE -------------
+            case ms_obs1:  // Measures dist to box, when testing -> Start 3.4 -0.1 1.57
                 switch (mission.stage) {
                     case sbms_init:
                         dist = 10;
                         speed = 0.2; // 0.2 gives +-0.06, 0.4 gives +-0.12
-                        wallDist = 0.3;
+                        wallDist = 0.1;
                         zone = 5; // 1 -> 9 zones of laser sensor.
                         angle = (180.0) / 180 * M_PI;
                         mission.stage = sbms_stage1;
@@ -333,6 +360,7 @@ int main()
                             mot.cmd = mot_stop;
                             mission.stage = sbms_stage2;
                         }
+
                         break;
                     case sbms_stage2:
                         dist = fmin(laserpar[4],laserpar[5]);
@@ -369,6 +397,7 @@ int main()
                             printf("Close!\n");
                             mot.cmd = mot_stop;
                             mission.state = ms_obs2;
+                            mission.stage = sbms_init;
                         }
                         break;
                 }
@@ -462,15 +491,22 @@ int main()
                         }
                         break;
                     case sbms_end:
-                        if (follow(dist, speed, middel, middel, mission.time)) mission.state = ms_error;
+                        if (follow(dist, speed, middel, middel, mission.time)) {
+                            mission.state = ms_obs3;
+                            printf("END of OBS2\n");
+                        }
                         if (isCrossing()) {
-                            mission.state = ms_end;
+
+                            mot.cmd = mot_move;
+                            mot.dist = ORIGO_TO_LINE;
+
+
                         }
                         break;
                 }
                 break;
 
-            case ms_obs3:
+            case ms_obs3:  // gate on loose, when testing start at 5.70 2.70 1.57
                 switch (mission.stage) {
                     case sbms_init:
                         dist = 4;
@@ -481,86 +517,149 @@ int main()
 
                         break;
 
-                    case sbms_stage1:
-                        if (follow(dist, speed, middel, middel, mission.time)) mission.stage = sbms_stage2;
+                    case sbms_stage1: // followline until gate is found on left side
+                        if (follow(dist, speed, middel, middel, mission.time)) {
+                            mission.stage = sbms_stage2;
+                            angle = (90.0) / 180 * M_PI;
+                            reset_odo(&odo);
+                            timeStamp1 = -1;
+                        }
 
                         if (irsensor->data[0] > 94 && timeStamp1 == -1) {
                             printf("Found first pole of gate\n");
-                            poseA.x = odo.x;
-                            poseA.y = odo.y;
-                            poseA.theta = odo.theta;
                             timeStamp1 = mission.time;
-                            printf("Pose is %f and %f\n", poseA.x, poseA.y);
-                        }
-
-                        if ((timeStamp1 != -1) && (irsensor->data[0] == 94) && (timeStamp2 == -1)) {
-                            printf("Cleared pole 1\n");
-                            timeStamp2 = mission.time;
-
-                        }
-
-                        if (irsensor->data[0] > 94 && timeStamp2 != -1){
-                            printf("Found second pole of gate\n");
-                            poseB.x = odo.x;
-                            poseB.y = odo.y;
-                            poseA.theta = odo.theta;
-                            printf("Pose is %f and %f\n", poseA.x, poseA.y);
-                            dist = sqrt(pow(poseB.x - poseA.x, 2) + pow(poseB.y - poseA.y, 2));
-                            printf("Dist  is %f\n", dist);
-                            // mission.stage = sbms_stage2;
-
-                            mot.dist = -dist;
+                            mot.dist = ORIGO_TO_LINE + SMR_WIDTH/2 + 0.05; // to place the SMR approx mid gate
                             mot.cmd = mot_move;
-                            angle = (90.0) / 180 * M_PI;
-                            speed = 0.1;
-
                         }
                         break;
 
-                    case sbms_stage2:
+                    case sbms_stage2: // turn towards gate on loose
 
                         if (turn(angle, speed, mission.time )) {
-                            dist = 2.5*SMR_LENGTH;
+                            dist = 4*SMR_LENGTH;
+                            //speed = 0.1;
                             mission.stage = sbms_stage3;
                         }
                         break;
 
-                    case sbms_stage3:
+                    case sbms_stage3: // drive through gate on loose until getting close to wall
                         if (fwd(dist, speed, mission.time)) {
                             mission.stage = sbms_stage4;
-                            angle = -(M_PI/2);
-                        }
+                            angle = (M_PI/2);
+                           }
 
+                        if ((checkLaserDist(0.35, 4) || checkLaserDist(0.35, 5)) && timeStamp1 == -1){
+
+                            mot.dist = ((laserpar[4] + laserpar[5])/2)/2;
+                            mot.cmd = mot_move;
+
+                           timeStamp1 = mission.time;
+                        }
                         break;
 
-                    case sbms_stage4:
+                    case sbms_stage4:   //turn left to follow wall
                         if (turn(angle, speed, mission.time)){
                             dist = 1.5;
                             mission.stage = sbms_stage5;
+                           timeStamp1 = -1;
                         }
 
                         break;
 
-                    case sbms_stage5:
-                        if (fwd(dist, speed, mission.time)) {
+                    case sbms_stage5: //followWall until finding opening
+                        if (followWall(dist, 0.25, 1, speed, mission.time)) {
                             mission.stage = sbms_stage6;
+                            angle = -(M_PI/2);
+                        }
 
+                        if (irsensor->data[4] == 94 && timeStamp1 == -1){
+                            printf("FOUND OPENING ON RIGHT SIDE\n");
+                            timeStamp1 = mission.time;
+                            //mot.dist = ORIGO_TO_LINE + SMR_WIDTH + 0.05;
+                            // mot.cmd = mot_move;
+                        }
+
+                        if (irsensor->data[4] > 94 && timeStamp1 != -1 ) {
+                            printf("second pole\n");
+                            angle = -(M_PI/2);
+                            mission.stage = sbms_stage6;
+                        }
+
+
+                        break;
+
+                    case sbms_stage6:    // turn right to face bottom gate in wall
+                        if (turn(angle, speed, mission.time)){
+                            mission.stage = sbms_stage7;
+                            dist = 2*SMR_LENGTH;
+                        }
+                        break;
+
+                    case sbms_stage7: //drive trough bottom opening
+                        if (fwd(dist, speed, mission.time)) {
+                            angle = -(M_PI/2);
+                            mission.stage = sbms_stage8;
+                        }
+                        break;
+
+                    case sbms_stage8:
+                        if (turn(angle, speed, mission.time)){
+                            mission.stage = sbms_stage9;
+                            speed = 0.2;
+                            dist = 3;
+                            }
+                        break;
+
+                    case sbms_stage9: // followWall until topLine
+                        if (followWall(dist, 0.25, 1, speed, mission.time)) {
+                            mission.stage = sbms_stage11;
+                            angle = -(M_PI/2);
                         }
 
                         if (isCrossing()){
                             mot.dist = ORIGO_TO_LINE;
                             mot.cmd = mot_move;
-                            angle = M_PI/2;
                         }
                         break;
 
-                    case sbms_stage6:
+                    case sbms_stage11: // turn right to face top opening
                         if (turn(angle, speed, mission.time)){
+                            mission.stage = sbms_stage12;
+                            dist = 2*SMR_LENGTH;
+
+                        }
+                        break;
+
+                    case sbms_stage12:
+                        if (follow(dist, speed, middel, middel, mission.time)){
+                            angle = M_PI;
+                            speed = 0.2;
+                            mission.stage = sbms_stage13;
+                        }
+
+                        break;
+
+                    case sbms_stage13:
+                        if (turn(angle, speed, mission.time)){
+                            mission.stage = sbms_stage14;
+                        dist = 3;
+                        }
+                        break;
+
+                    case sbms_stage14:
+                        if (follow(dist, speed, middel, middel, mission.time)){
                             mission.stage = sbms_end;
                         }
+
+                        if (isCrossing()){
+                            mot.dist = ORIGO_TO_LINE;
+                            mot.cmd = mot_move;
+                        }
+
                         break;
                     case sbms_end:
-
+                        printf("End of gateOnLoose and Wall*2!\n");
+                        mot.cmd = mot_stop;
                         mission.state = ms_obs4;
                         mission.stage = sbms_init;
                         break;
@@ -573,165 +672,174 @@ int main()
                 break;
 
 
-            case ms_obs4:
-
+            case ms_obs4: // follow white line from upper cross till cross in front of garage
                 switch (mission.stage) {
-
                     case sbms_init:
                         dist = 4;
                         speed = 0.2;
                         mission.stage = sbms_stage1;
+                        timeStamp1 = -1;
+                        timeStamp2 = -1;
 
                         break;
-                    case sbms_stage1: // follow line until reach crossing
-
-                        if (follow(dist, speed, middel, middel, mission.time)) {
-                            printf("STOPPED IN obs3_STAGE1 because of reached distance\n");
-                            mission.stage = sbms_end;
-                        }
-                        if (isCrossing()) {
+                    case sbms_stage1: // first black then white end at bottom black line
+                        if (follow(dist, speed, middel, middel, mission.time)){
                             mission.stage = sbms_stage2;
-                            printf("FOUND CROSS IN MS_obs3 - SBMS1");
-                            angle = M_PI/2;
-                            speed = 0.2;
-                            dist = 10;
-
+                            angle = -(M_PI/2);
                         }
-                        break;
-                    case sbms_stage2:   //turn left 90 degrees
+                        if (isCrossing()){
+                            mot.dist = ORIGO_TO_LINE;
+                            mot.cmd = mot_move;
+                        }
 
-                        if (turn(angle, speed, mission.time)) {
-                            dist = 4;
-                            speed = 0.2;
-                            printf("Done turning, ready to follow wall\n");
-                            timeStamp1 = -1;
-                            timeStamp2 = -1;
+
+                        break;
+                    case sbms_stage2: // turn right to face garage
+                        if (turn(angle, speed, mission.time)){
                             mission.stage = sbms_stage3;
-
                         }
 
                         break;
-                    case sbms_stage3:  //follow wall until opening is marked
-                        //
-                        if (fwd(dist, speed, mission.time)) {
-                            printf("STOPPED in ms_OBS3-sbms_stage3 due to reached dist");
-                            mission.stage = ms_end;
-                        }
-                        //TODO implement correction relative to wall, a wall controller
-
-                        if (mission.time > 100) {
-                            if (irsensor->data[0] == 94 && timeStamp1 == -1) {
-                                printf("Found opening in wall\n");
-                                poseA.x = odo.x;
-                                poseA.y = odo.y;
-                                poseA.theta = odo.theta;
-                                timeStamp1 = mission.time;
-                                printf("Pose is %f and %f\n", poseA.x, poseA.y);
-                            }
-                            if (timeStamp1 != -1 && irsensor->data[0] > 94) {
-                                printf("WALL opening ended\n");
-                                timeStamp2 = mission.time;
-                                poseB.x = odo.x;
-                                poseB.y = odo.y;
-                                printf("Pose is %f and %f\n", poseB.x, poseB.y);
-                                poseA.theta = odo.theta;
-                                dist = sqrt(pow(poseB.x - poseA.x, 2) + pow(poseB.y - poseA.y, 2));
-                                printf("Dist  is %f\n", dist);
-                                angle = M_PI/2;
-
-                                mission.stage = sbms_stage5;
-                            }
-                        }
-                        break;
-
-                    case sbms_stage4: //TODO get this to work // backwards half the distance of the gate
-                        if (fwd(-dist, speed, mission.time)) {
-                            angle = M_PI/2;
-                            mission.stage = sbms_stage5;
-                        }
-                        break;
-
-                    case sbms_stage5:  // turn left to face gate
-                        if (turn(angle, speed, mission.time)) {
-                            dist = 2*SMR_LENGTH;
-                            speed = 0.1;
-                            mission.stage = sbms_stage6;
-                        }
-                        break;
-
-                    case sbms_stage6:   // drive through gate
-                        if (fwd(dist, speed, mission.time)) {
-
-                            angle = M_PI/2;
-                           mission.stage = sbms_stage7;
-                        }
-
-
-
-                        break;
-
-                    case sbms_stage7:   // turn left 90 degress to follow wall
-                        if (turn(angle, speed, mission.time)) {
-                            mission.stage = sbms_stage8;
-                            speed = 0.2;
-                            dist = 2.5;
-                        }
-                        break;
-
-                    case sbms_stage8: //
-
-                        if (fwd(dist, speed, mission.time)) {
-                           angle = M_PI/2;
-                            mission.stage = sbms_stage9;
-                        }
-
-                        if (isCrossing()){
-                            mot.dist = ORIGO_TO_LINE;
-                            mot.cmd = mot_move;
-                        }
-
-                        break;
-
-                    case sbms_stage9:
-                        if (turn(angle, speed, mission.time)) {
-                         dist = 2;
-                         speed = 0.2;
-                         mission.stage = sbms_stage10;
-                        }
-                        break;
-
-                    case sbms_stage10:
-                        if (fwd(dist, speed, mission.time)){
+                    case sbms_stage3:
+                        if (follow(dist, speed, middel, middel, mission.time)){
                             mission.stage = sbms_end;
-                        }
-
+                                                    }
                         if (isCrossing()){
                             mot.dist = ORIGO_TO_LINE;
                             mot.cmd = mot_move;
                         }
+
+                        break;
+                    case sbms_stage4:
+
+                        break;
+                    case sbms_stage5:
+
+                        break;
+                    case sbms_stage6:
+
+                        break;
+                    case sbms_stage7:
+
+                        break;
+                    case sbms_stage8:
+
+                        break;
+                    case sbms_stage9:
+
+                        break;
+                    case sbms_stage10:
+
+                        break;
+                    case sbms_stage11:
+
+                        break;
+                    case sbms_stage12:
+
                         break;
 
                     case sbms_end:
-                        printf("END of obs4\n");
-                        printf("POSE %f , %f, %f \n", odo.x, odo.y, odo.theta);
-                        dist = 3;
-                        speed = 0.2;
-                        mission.state = ms_end;
+                        printf("End of 2 gates on white line, stopped in front of garage!\n");
+                        mot.cmd = mot_stop;
+                        mission.state = ms_obs5;
                         mission.stage = sbms_init;
                         break;
-                    default:
+                }
+
+            break;
+            case ms_obs5: // park in garage
+                switch (mission.stage) {
+                    case sbms_init:
+                        dist = 4;
+                        speed = 0.2;
+                        mission.stage = sbms_stage1;
+                        timeStamp1 = -1;
+                        timeStamp2 = -1;
+
+                        break;
+                    case sbms_stage1:
+mission.state = ms_end;
+                        break;
+                    case sbms_stage2:
+
+                        break;
+                    case sbms_stage3:
+
+                        break;
+                    case sbms_stage4:
+
+                        break;
+                    case sbms_stage5:
+
+                        break;
+                    case sbms_stage6:
+
+                        break;
+                    case sbms_stage7:
+
+                        break;
+                    case sbms_stage8:
+
+                        break;
+                    case sbms_stage9:
+
+                        break;
+                    case sbms_stage10:
+
+                        break;
+                    case sbms_stage11:
+
+                        break;
+                    case sbms_stage12:
+
+                        break;
+                }
+
+
+            case ms_forward: // == 20 simple test mission, not used in obstaclecourse
+                switch (mission.stage) {
+                    case sbms_init:
+                    dist = 2.5;
+                    speed = 0.2;
+                    mission.stage = sbms_stage1;
+                    break;
+
+                    case sbms_stage1:
+                    if (fwd(dist,speed, mission.time)) mission.state = ms_end;
+                    break;
+
+                }
+                break;
+
+            case ms_square: // == 30 simple test mission, not used in obstaclecourse
+                switch (mission.stage) {
+                    case sbms_init:
+                        n= 5;
+                        dist = 2.5;
+                        speed = 0.1;
+                        angle = (90.0) / 180 * M_PI;
+                        mission.stage = sbms_stage1;
+                        break;
+
+                    case sbms_stage1:
+                        if (turn(angle, speed, mission.time)) mission.stage = sbms_stage2;
+
+                        break;
+
+                    case sbms_stage2:
+                        if (n != 0){
+                            angle = M_PI/4;
+                            mission.stage = sbms_stage1;
+                            printf("N is %i and theta is %f\n", n, odo.theta);
+                        } else mission.state = ms_end;
+                        n--;
+
                         break;
 
                 }
                 break;
 
 
-            case ms_obs5:
-                if (fwd(dist, speed, mission.time)) mission.state = ms_end;
-                break;
-            case ms_obs6:
-                if (fwd(dist, speed, mission.time)) mission.state = ms_end;
-                break;
             case ms_end:
                 mot.cmd = mot_stop;
                 running = 0;
@@ -752,9 +860,9 @@ int main()
         mot.left_pos = odo.left_pos;
         mot.right_pos = odo.right_pos;
         update_motcon(&mot);
-        speedl->data[0] = 100 * mot.motorspeed_l;
+        speedl->data[0] = (int) (100 * mot.motorspeed_l);
         speedl->updated = 1;
-        speedr->data[0] = 100 * mot.motorspeed_r;
+        speedr->data[0] = (int) (100 * mot.motorspeed_r);
         speedr->updated = 1;
         if (time % 100 == 0) time++;
         /* stop if keyboard is activated*/
@@ -836,11 +944,16 @@ void update_motcon(motiontype *p)
                 break;
             case mot_move:
                 p->startpos = (p->left_pos + p->right_pos) / 2;
+                odo.theta_ref = odo.theta;
                 p->curcmd = mot_move;
                 break;
             case mot_follow:
                 p->startpos = (p->left_pos + p->right_pos) / 2;
                 p->curcmd = mot_follow;
+                break;
+            case mot_followWall:
+                p->startpos = (p->left_pos + p->right_pos) / 2;
+                p->curcmd = mot_followWall;
                 break;
             case mot_turn:
                 p->startpos = odo.theta;
@@ -856,15 +969,15 @@ void update_motcon(motiontype *p)
             p->motorspeed_r = 0;
             break;
         case mot_move:
-            if ((p->dist >= 0 && (p->right_pos + p->left_pos) / 2 - p->startpos >= p->dist)||(p->dist < 0 && p->startpos - (p->right_pos + p->left_pos) / 2 >= abs(p->dist))) {
+            if ((p->dist >= 0 && (p->right_pos + p->left_pos) / 2 - p->startpos >= p->dist)||(p->dist < 0 && p->startpos - (p->right_pos + p->left_pos) / 2 >= fabs(p->dist))) {
                 p->finished = 1;
                 p->motorspeed_l = 0;
                 p->motorspeed_r = 0;
             } else {
                 angular_controller(&odo);
-                if (odo.delta_v > LIMIT) odo.delta_v = LIMIT;
-                p->motorspeed_l = p->speedcmd - (odo.delta_v/2);  // exercie 7 1
-                p->motorspeed_r = p->speedcmd + (odo.delta_v/2);  // exercie 7 1
+                if (odo.delta_v > LIMIT) odo.delta_v = SAMPLE_RATE*LIMIT;
+                p->motorspeed_l = p->speedcmd - (odo.delta_v/2);
+                p->motorspeed_r = p->speedcmd + (odo.delta_v/2);
             }
             break;
         case mot_follow:
@@ -873,22 +986,45 @@ void update_motcon(motiontype *p)
                 p->motorspeed_l = 0;
                 p->motorspeed_r = 0;
             } else {
-                //mot.ls = linesensorMinimumIntensity(linesensor);
                 mot.ls = centerOfMass();
-                //printf("CoM = %d\n", mot.ls);
+
                 int ref = mot.ls_ref;
-                int lsInt = (int) ceil(mot.ls);
-                if (blackWhiteTrans(linesensor->data[lsInt], lsInt) != BLACK){
-                    if (mot.dir == left) {
-                        ref = right;
-                    } else {
+
+
+                if (mot.dir == middel) {
+                    //continue straight
+                } else if (mot.dir == right) {
+                    if (linesensor->data[2] == BLACK){
                         ref = left;
                     }
+                }else if (mot.dir == left) {
+                    if (linesensor->data[6] == BLACK) {
+                        ref = right;
+                    }
                 }
-                line_controller(&mot, ref);
-                if (mot.delta_v > LIMIT) mot.delta_v = LIMIT;
-                p->motorspeed_l = p->speedcmd + (mot.delta_v/2);  // exercie 7 1
-                p->motorspeed_r = p->speedcmd - (mot.delta_v/2);  // exercie 7 1
+
+                line_controller(p, ref);
+                if (p->delta_v > LIMIT) p->delta_v = SAMPLE_RATE*LIMIT;
+                p->motorspeed_l = p->speedcmd + (p->delta_v/2);
+                p->motorspeed_r = p->speedcmd - (p->delta_v/2);
+            }
+            break;
+        case mot_followWall:
+            if ((p->right_pos + p->left_pos) / 2 - p->startpos > p->dist) {
+                p->finished = 1;
+                p->motorspeed_l = 0;
+                p->motorspeed_r = 0;
+            } else {
+                double ls = laserpar[p->color];
+                if (ls > p->ls*2){
+                    p->ls = p->ls_ref;
+                } else {
+                    p->ls = ls;
+                }
+                wall_controller(p);
+                if (p->delta_v > LIMIT) p->delta_v = SAMPLE_RATE*LIMIT;
+                p->motorspeed_l = p->speedcmd + (p->delta_v/2);
+                p->motorspeed_r = p->speedcmd - (p->delta_v/2);
             }
             break;
         case mot_turn:
@@ -905,7 +1041,7 @@ void update_motcon(motiontype *p)
                 p->motorspeed_r = 0;
                 p->finished = 1;
             }
-            break;
+           break;
     }
 }
 
@@ -968,44 +1104,26 @@ int turn(double angle, double speed, int time) {
         vMax = sqrt(2 * LIMIT * (K1*(fabs(mot.angle) - fabs(odo.theta - mot.startpos))*(180/M_PI)));
         if (mot.speedcmd >= vMax && vMax >= LIMIT/2) mot.speedcmd = vMax;
     }
-    odo.theta_ref = odo.theta;
+
     return mot.finished;
 }
 
-void angular_controller(odotype *p)   // exercise 7 1
+void angular_controller(odotype *p)
 {
     p->delta_v = K*(p->theta_ref-p->theta);
 }
 
-#ifdef SIM
-double blackWhiteTrans(double inputValue, int dump)
+
+double blackWhiteTransSim(double inputValue)
 {
     double diffValue = WHITE-BLACK;
     return (inputValue - WHITE + diffValue)/diffValue;
 }
-#else
-double blackWhiteTrans(double inputValue, int sensorNo)
+
+double blackWhiteTransReal(double inputValue, int sensorNo)
 {
     double diffValue = whiteArray[sensorNo]-blackArray[sensorNo];
     return (inputValue - whiteArray[sensorNo] + diffValue)/diffValue;
-}
-#endif
-
-
-
-int linesensorMinimumIntensity(symTableElement *linesensor)
-{
-    int index = 0;
-    double calibD;
-    double minim = blackWhiteTrans(linesensor->data[0], 0);
-    for (int i = 1; i < linesensor->length; i++){
-        calibD = blackWhiteTrans(linesensor->data[i], i);
-        if (calibD < minim){
-            index = i;
-            minim = calibD;
-        }
-    }
-    return index;
 }
 
 void line_controller(motiontype *p, int ref)
@@ -1016,26 +1134,49 @@ void line_controller(motiontype *p, int ref)
 double centerOfMass()
 {
     double num = 0, det = 0;
-    for (int i = 0; i < linesensor->length; i++){
-        num += (i+1)*(1-blackWhiteTrans(linesensor->data[i], i));
-        det += (1-blackWhiteTrans(linesensor->data[i], i));
-        //printf("%d, ", linesensor->data[i]);
+
+    if (runInSimulator){
+        for (int i = 0; i < linesensor->length; i++){
+            num += (i+1)*(1-blackWhiteTransSim(linesensor->data[i]));
+            det += (1-blackWhiteTransSim(linesensor->data[i]));
+            //printf("%d, ", linesensor->data[i]);
+        }
+
+    } else if (!runInSimulator) {
+        for (int i = 0; i < linesensor->length; i++){
+            num += (i+1)*(1-blackWhiteTransReal(linesensor->data[i], i));
+            det += (1-blackWhiteTransReal(linesensor->data[i], i));
+            //printf("%d, ", linesensor->data[i]);
+        }
+
     }
+
     double res = mot.ls_ref; // default middel sensor -> drive straight.
     if (det != 0) res = num/det; // Seg fault prevention
-    //printf("res = %0.4f\n",res);
+   // printf("res COM = %0.4f\n",res);
+
     return res-1; // Index in linesensor data array.
 }
 
 boolean isCrossing()
 {
     double sum = 0;
-    for (int i = 0; i < linesensor->length; i++){
-        if (blackWhiteTrans(linesensor->data[i], i) <= LINE_ERROR_OFFSET){
-            sum++;
+
+    if (runInSimulator) {
+        for (int i = 0; i < linesensor->length; i++){
+            if (blackWhiteTransSim(linesensor->data[i]) <= LINE_ERROR_OFFSET){
+                sum++;
+            }
+        }
+    } else if (!runInSimulator) {
+        for (int i = 0; i < linesensor->length; i++){
+            if (blackWhiteTransReal(linesensor->data[i], i) <= LINE_ERROR_OFFSET){
+                sum++;
+            }
         }
     }
-    //printf("sum = %0.4f\n", sum);
+
+
     dataLog[missonCount].theta = odo.theta;
     if (sum >= linesensor->length-2) return TRUE;
     return FALSE;
@@ -1070,6 +1211,33 @@ void sm_update(smtype *p)
         p->prevstate = p->oldstate;
         p->oldstate = p->state;
     }
+}
+
+int followWall(double dist, double range, int zone, double speed, int time) {
+    static double vMax;
+    if (time == 0) {
+        mot.cmd = mot_followWall;
+        mot.speedcmd = 0;
+        mot.dist = dist;
+        mot.ls_ref = range;
+        mot.color = zone;
+        vMax = 0;
+        return 0;
+    } else {
+        if (mot.speedcmd < speed && vMax == 0) {
+            mot.speedcmd = SAMPLE_RATE*LIMIT*time;
+            if(mot.speedcmd > speed) mot.speedcmd = speed;
+        } else {
+            vMax = sqrt(2 * LIMIT * (mot.dist - ((mot.right_pos + mot.left_pos) / 2 - mot.startpos)));
+            if (mot.speedcmd > vMax) mot.speedcmd = vMax;
+        }
+        return mot.finished;
+    }
+}
+
+void wall_controller(motiontype *p)
+{
+    p->delta_v = K_WALL*(p->ls_ref-p->ls);
 }
 
 
