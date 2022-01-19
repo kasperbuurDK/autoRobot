@@ -166,6 +166,8 @@ boolean checkLines(int lineLow, int lineHigh);
 int followWall(double dist, double range, int zone, double speed, int time);
 void wall_controller(motiontype *p);
 
+
+
 // SMR input/output data
 symTableElement *inputtable, *outputtable;
 symTableElement *lenc, *renc, *linesensor, *irsensor, *speedl, *speedr, *resetmotorr, *resetmotorl;
@@ -591,18 +593,18 @@ int main(int argc, char *argv[])
                     case sbms_stage6:    // turn right to face bottom gate in wall
                         if (turn(angle, speed, mission.time)){
                             mission.stage = sbms_stage7;
-                            dist = 2*SMR_LENGTH;
+                            dist = 2.1*SMR_LENGTH;
                         }
                         break;
 
-                    case sbms_stage7: //drive trough bottom opening
+                    case sbms_stage7: //drive through bottom gate
                         if (fwd(dist, speed, mission.time)) {
                             angle = -(M_PI/2);
                             mission.stage = sbms_stage8;
                         }
                         break;
 
-                    case sbms_stage8:
+                    case sbms_stage8: // turn ro face upwards
                         if (turn(angle, speed, mission.time)){
                             mission.stage = sbms_stage9;
                             speed = 0.2;
@@ -630,7 +632,7 @@ int main(int argc, char *argv[])
                         }
                         break;
 
-                    case sbms_stage12:
+                    case sbms_stage12: // follow line trough gate
                         if (follow(dist, speed, middel, middel, mission.time)){
                             angle = M_PI;
                             speed = 0.2;
@@ -639,14 +641,14 @@ int main(int argc, char *argv[])
 
                         break;
 
-                    case sbms_stage13:
+                    case sbms_stage13: // turn 180 degrees to go back
                         if (turn(angle, speed, mission.time)){
                             mission.stage = sbms_stage14;
                         dist = 3;
                         }
                         break;
 
-                    case sbms_stage14:
+                    case sbms_stage14: // drive back trough gate, stop at crossing
                         if (follow(dist, speed, middel, middel, mission.time)){
                             mission.stage = sbms_end;
                         }
@@ -666,9 +668,7 @@ int main(int argc, char *argv[])
 
                     default:
                         break;
-
                 }
-
                 break;
 
 
@@ -681,8 +681,9 @@ int main(int argc, char *argv[])
                         timeStamp1 = -1;
                         timeStamp2 = -1;
 
+
                         break;
-                    case sbms_stage1: // first black then white end at bottom black line
+                    case sbms_stage1: //follow first black then white end at bottom black line
                         if (follow(dist, speed, middel, middel, mission.time)){
                             mission.stage = sbms_stage2;
                             angle = -(M_PI/2);
@@ -690,6 +691,7 @@ int main(int argc, char *argv[])
                         if (isCrossing()){
                             mot.dist = ORIGO_TO_LINE;
                             mot.cmd = mot_move;
+                            printf("First cross\n");
                         }
 
 
@@ -700,49 +702,24 @@ int main(int argc, char *argv[])
                         }
 
                         break;
-                    case sbms_stage3:
+                    case sbms_stage3: //follow line until crossing in front of garage
                         if (follow(dist, speed, middel, middel, mission.time)){
                             mission.stage = sbms_end;
-                                                    }
+                        }
+
                         if (isCrossing()){
                             mot.dist = ORIGO_TO_LINE;
                             mot.cmd = mot_move;
+                            printf("Second cross\n");
                         }
 
-                        break;
-                    case sbms_stage4:
-
-                        break;
-                    case sbms_stage5:
-
-                        break;
-                    case sbms_stage6:
-
-                        break;
-                    case sbms_stage7:
-
-                        break;
-                    case sbms_stage8:
-
-                        break;
-                    case sbms_stage9:
-
-                        break;
-                    case sbms_stage10:
-
-                        break;
-                    case sbms_stage11:
-
-                        break;
-                    case sbms_stage12:
-
-                        break;
 
                     case sbms_end:
                         printf("End of 2 gates on white line, stopped in front of garage!\n");
                         mot.cmd = mot_stop;
-                        mission.state = ms_obs5;
+                        mission.state = ms_end;
                         mission.stage = sbms_init;
+
                         break;
                 }
 
@@ -755,22 +732,48 @@ int main(int argc, char *argv[])
                         mission.stage = sbms_stage1;
                         timeStamp1 = -1;
                         timeStamp2 = -1;
+                        angle = -(M_PI/2);
 
                         break;
                     case sbms_stage1:
-mission.state = ms_end;
+                        if (turn(angle, speed, mission.time)){
+                            mission.stage = sbms_stage2;
+                        }
                         break;
-                    case sbms_stage2:
+                    case sbms_stage2: //drive upwards
+                        if (fwd(dist, speed, mission.time)) {
+                            mission.stage = sbms_stage3;
+                            angle = M_PI/2;
+                        }
+
+                        if (irsensor->data[0] == 94){
+                            mot.dist = SMR_LENGTH;
+                            mot.cmd = mot_move;
+                        }
 
                         break;
                     case sbms_stage3:
+                        if (turn(angle, speed, mission.time)){
+                            mission.stage = sbms_stage4;
+                            wallDist = 0.25;
+                        }
 
                         break;
                     case sbms_stage4:
+                        if (followWall(dist, wallDist, 9, speed, mission.time)) {
+                            mission.stage = sbms_stage5;
+                            angle = M_PI/2;
+                        }
+
+                        if (irsensor->data[0] == 94){
+                            mot.dist = SMR_LENGTH;
+                            mot.cmd = mot_move;
+                        }
 
                         break;
                     case sbms_stage5:
 
+                        mission.stage = sbms_end;
                         break;
                     case sbms_stage6:
 
@@ -1239,6 +1242,3 @@ void wall_controller(motiontype *p)
 {
     p->delta_v = K_WALL*(p->ls_ref-p->ls);
 }
-
-
-
